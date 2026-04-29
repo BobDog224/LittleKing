@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>小小帝国式战场 - 第10步</title>
+  <title>小小帝国式战场 - 第11步</title>
   <style>
     /* 让页面占满浏览器窗口，并使用深色背景 */
     html,
@@ -78,6 +78,19 @@
       background: #15803d;
     }
 
+    button.restart {
+      border-color: #facc15;
+      background: #854d0e;
+    }
+
+    button.restart:hover {
+      background: #a16207;
+    }
+
+    .hidden {
+      display: none;
+    }
+
     .state-pill {
       min-width: 110px;
       color: #cbd5e1;
@@ -96,6 +109,7 @@
       <button id="swordsmanButton" class="selected">剑士</button>
       <button id="archerButton">弓箭手</button>
       <button id="startBattleButton" class="primary">开始战斗</button>
+      <button id="restartButton" class="restart hidden">重新开始</button>
     </div>
   </div>
 
@@ -108,9 +122,11 @@
     const swordsmanButton = document.getElementById("swordsmanButton");
     const archerButton = document.getElementById("archerButton");
     const startBattleButton = document.getElementById("startBattleButton");
+    const restartButton = document.getElementById("restartButton");
 
-    // 游戏状态：deploy 表示布阵阶段，battle 表示战斗阶段。
+    // 游戏状态：deploy 表示布阵阶段，battle 表示战斗阶段，result 表示胜负已分。
     let gameState = "deploy";
+    let resultMessage = "";
 
     // 当前选择的兵种，默认选择剑士。
     let selectedUnitType = "swordsman";
@@ -175,12 +191,21 @@
 
     // 玩家布阵单位和敌方固定单位
     const playerUnits = [];
-    const enemyUnits = [
-      createUnit("enemy", "swordsman", 16, 1),
-      createUnit("enemy", "swordsman", 16, 4),
-      createUnit("enemy", "archer", 14, 2),
-      createUnit("enemy", "archer", 14, 3)
-    ];
+    let enemyUnits = createEnemyUnits();
+
+    /**
+     * 创建敌方固定布阵。
+     *
+     * @returns {object[]} 敌方单位列表
+     */
+    function createEnemyUnits() {
+      return [
+        createUnit("enemy", "swordsman", 16, 1),
+        createUnit("enemy", "swordsman", 16, 4),
+        createUnit("enemy", "archer", 14, 2),
+        createUnit("enemy", "archer", 14, 3)
+      ];
+    }
 
     /**
      * 创建一个单位数据对象。
@@ -413,8 +438,28 @@
     startBattleButton.addEventListener("click", function () {
       syncAllUnitPixelPositions();
       gameState = "battle";
+      resultMessage = "";
       syncToolbar();
     });
+
+    restartButton.addEventListener("click", function () {
+      restartGame();
+    });
+
+    /**
+     * 回到 deploy 阶段，清空玩家布阵并重置敌方单位。
+     */
+    function restartGame() {
+      playerUnits.length = 0;
+      enemyUnits = createEnemyUnits();
+      attackEffects = [];
+      gameState = "deploy";
+      resultMessage = "";
+      selectedUnitType = "swordsman";
+
+      syncAllUnitPixelPositions();
+      syncToolbar();
+    }
 
     /**
      * 根据当前状态刷新底部按钮样式。
@@ -428,6 +473,7 @@
       swordsmanButton.disabled = !isDeploy;
       archerButton.disabled = !isDeploy;
       startBattleButton.disabled = !isDeploy;
+      restartButton.classList.toggle("hidden", gameState !== "result");
     }
 
     /**
@@ -480,6 +526,46 @@
       updateAttackEffects(deltaTime);
       removeDeadUnits(playerUnits);
       removeDeadUnits(enemyUnits);
+      checkBattleResult();
+    }
+
+    /**
+     * battle 阶段检查双方是否还有存活单位。
+     * 一方全部死亡后进入 result 阶段，后续 update 不再驱动行动。
+     */
+    function checkBattleResult() {
+      const hasLivingPlayer = playerUnits.some(function (unit) {
+        return unit.alive;
+      });
+      const hasLivingEnemy = enemyUnits.some(function (unit) {
+        return unit.alive;
+      });
+
+      if (!hasLivingEnemy) {
+        gameState = "result";
+        resultMessage = "胜利";
+        clearAllTargets();
+        syncToolbar();
+        return;
+      }
+
+      if (!hasLivingPlayer) {
+        gameState = "result";
+        resultMessage = "失败";
+        clearAllTargets();
+        syncToolbar();
+      }
+    }
+
+    /**
+     * 胜负已分时清空所有目标，避免 result 阶段还显示攻击连线。
+     */
+    function clearAllTargets() {
+      for (const unit of getAllUnits()) {
+        unit.target = null;
+      }
+
+      attackEffects = [];
     }
 
     /**
@@ -660,6 +746,7 @@
       drawTargetLines(context);
       drawAttackEffects(context);
       drawUnits(context);
+      drawResultOverlay(context);
       drawDebugInfo(context);
     }
 
@@ -944,6 +1031,33 @@
     }
 
     /**
+     * result 阶段绘制胜负结果。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     */
+    function drawResultOverlay(context) {
+      if (gameState !== "result") {
+        return;
+      }
+
+      context.fillStyle = "rgba(15, 23, 42, 0.68)";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.font = "48px Arial, Microsoft YaHei, sans-serif";
+      context.fillStyle = resultMessage === "胜利" ? "#22c55e" : "#ef4444";
+      context.fillText(resultMessage, canvas.width / 2, canvas.height / 2);
+
+      context.font = "18px Arial, Microsoft YaHei, sans-serif";
+      context.fillStyle = "#e5e7eb";
+      context.fillText("点击下方“重新开始”返回布阵阶段", canvas.width / 2, canvas.height / 2 + 48);
+
+      context.textAlign = "left";
+      context.textBaseline = "alphabetic";
+    }
+
+    /**
      * 绘制标题、FPS、deltaTime、运行时间和鼠标所在格子。
      *
      * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
@@ -951,7 +1065,7 @@
     function drawDebugInfo(context) {
       context.fillStyle = "#f8fafc";
       context.font = "20px Arial, Microsoft YaHei, sans-serif";
-      context.fillText("自动攻击和死亡 - 第10步", 24, 32);
+      context.fillText("胜负判断 - 第11步", 24, 32);
 
       context.font = "16px Consolas, Microsoft YaHei, monospace";
       context.fillStyle = "#38bdf8";
@@ -969,6 +1083,11 @@
       context.fillStyle = "#cbd5e1";
       context.fillText(`state: ${gameState}`, 24, 80);
       context.fillText(`selected: ${unitConfigs[selectedUnitType].name}`, 24, 102);
+
+      if (resultMessage) {
+        context.fillStyle = "#facc15";
+        context.fillText(`result: ${resultMessage}`, 24, 124);
+      }
     }
 
     /**
