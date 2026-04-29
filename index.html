@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>小小帝国式战场 - 第6步</title>
+  <title>小小帝国式战场 - 第7步</title>
   <style>
     /* 让页面占满浏览器窗口，并使用深色背景 */
     html,
@@ -22,6 +22,13 @@
       font-family: Arial, "Microsoft YaHei", sans-serif;
     }
 
+    .game-shell {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
     /* canvas 居中显示，并加一点边框方便观察范围 */
     canvas {
       width: 900px;
@@ -30,16 +37,83 @@
       border: 1px solid #334155;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
     }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 900px;
+      min-height: 44px;
+    }
+
+    button {
+      min-width: 96px;
+      height: 38px;
+      border: 1px solid #475569;
+      background: #1e293b;
+      color: #e5e7eb;
+      border-radius: 6px;
+      font-size: 15px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #334155;
+    }
+
+    button.selected {
+      border-color: #facc15;
+      background: #854d0e;
+      color: #fff7ed;
+    }
+
+    button.primary {
+      border-color: #22c55e;
+      background: #166534;
+    }
+
+    button.primary:hover {
+      background: #15803d;
+    }
+
+    .state-pill {
+      min-width: 110px;
+      color: #cbd5e1;
+      font-size: 15px;
+      text-align: right;
+    }
   </style>
 </head>
 <body>
-  <!-- 游戏画布：内部绘制尺寸为 900 x 600 -->
-  <canvas id="gameCanvas" width="900" height="600"></canvas>
+  <div class="game-shell">
+    <!-- 游戏画布：内部绘制尺寸为 900 x 600 -->
+    <canvas id="gameCanvas" width="900" height="600"></canvas>
+
+    <div class="toolbar">
+      <span id="stateLabel" class="state-pill">deploy</span>
+      <button id="swordsmanButton" class="selected">剑士</button>
+      <button id="archerButton">弓箭手</button>
+      <button id="startBattleButton" class="primary">开始战斗</button>
+    </div>
+  </div>
 
   <script>
     // 获取 canvas 元素和 2D 绘图上下文
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
+
+    const stateLabel = document.getElementById("stateLabel");
+    const swordsmanButton = document.getElementById("swordsmanButton");
+    const archerButton = document.getElementById("archerButton");
+    const startBattleButton = document.getElementById("startBattleButton");
+
+    // 游戏状态：deploy 表示布阵阶段，battle 表示战斗阶段。
+    let gameState = "deploy";
+
+    // 当前选择的兵种，默认选择剑士。
+    let selectedUnitType = "swordsman";
 
     // 记录上一帧的时间，用来计算 deltaTime
     let lastTime = performance.now();
@@ -65,12 +139,75 @@
       padding: 56
     };
 
+    // 兵种配置。第7步只用来创建和显示单位，不处理移动和攻击。
+    const unitConfigs = {
+      swordsman: {
+        name: "剑士",
+        type: "melee",
+        hp: 120,
+        attack: 20,
+        speed: 40,
+        attackRange: 1,
+        attackCooldown: 0.8,
+        attackRows: [0]
+      },
+      archer: {
+        name: "弓箭手",
+        type: "ranged",
+        hp: 80,
+        attack: 15,
+        speed: 30,
+        attackRange: 4,
+        attackCooldown: 0.8,
+        attackRows: [-1, 0, 1]
+      }
+    };
+
     // 鼠标当前所在位置和格子坐标
     const mouse = {
       x: 0,
       y: 0,
       grid: null
     };
+
+    // 玩家布阵单位和敌方固定单位
+    const playerUnits = [];
+    const enemyUnits = [
+      createUnit("enemy", "swordsman", 16, 1),
+      createUnit("enemy", "swordsman", 16, 4),
+      createUnit("enemy", "archer", 14, 2),
+      createUnit("enemy", "archer", 14, 3)
+    ];
+
+    /**
+     * 创建一个单位数据对象。
+     *
+     * @param {"player" | "enemy"} team 阵营
+     * @param {"swordsman" | "archer"} unitType 兵种 key
+     * @param {number} col 所在列
+     * @param {number} row 所在行
+     * @returns {object} 单位数据
+     */
+    function createUnit(team, unitType, col, row) {
+      const config = unitConfigs[unitType];
+
+      return {
+        id: `${team}-${unitType}-${col}-${row}-${Date.now()}-${Math.random()}`,
+        team,
+        unitType,
+        name: config.name,
+        type: config.type,
+        col,
+        row,
+        hp: config.hp,
+        maxHp: config.hp,
+        attack: config.attack,
+        speed: config.speed,
+        attackRange: config.attackRange,
+        attackCooldown: config.attackCooldown,
+        attackRows: config.attackRows
+      };
+    }
 
     /**
      * 根据 canvas 大小自动计算格子尺寸，并让战场居中。
@@ -132,6 +269,44 @@
       };
     }
 
+    /**
+     * 判断某个格子是否在玩家布阵区。
+     *
+     * @param {number} col 列
+     * @param {number} row 行
+     * @returns {boolean} 是否可放置玩家单位
+     */
+    function isPlayerDeployCell(col, row) {
+      return (
+        row >= 0 &&
+        row < battlefield.rows &&
+        col >= battlefield.playerStartCol &&
+        col <= battlefield.playerEndCol
+      );
+    }
+
+    /**
+     * 查找某个格子里是否已经有单位。
+     *
+     * @param {number} col 列
+     * @param {number} row 行
+     * @returns {object | undefined} 找到的单位
+     */
+    function getUnitAtGrid(col, row) {
+      return getAllUnits().find(function (unit) {
+        return unit.col === col && unit.row === row;
+      });
+    }
+
+    /**
+     * 获取全部单位，方便统一渲染和检查格子占用。
+     *
+     * @returns {object[]} 全部单位
+     */
+    function getAllUnits() {
+      return playerUnits.concat(enemyUnits);
+    }
+
     // 监听鼠标移动，记录鼠标在 canvas 内的位置，并转换成网格坐标
     canvas.addEventListener("mousemove", function (event) {
       const rect = canvas.getBoundingClientRect();
@@ -148,9 +323,71 @@
       mouse.grid = null;
     });
 
+    // deploy 阶段点击左侧布阵区：空格放兵，已有玩家单位则取消放置。
+    canvas.addEventListener("click", function (event) {
+      if (gameState !== "deploy") {
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const clickX = (event.clientX - rect.left) * scaleX;
+      const clickY = (event.clientY - rect.top) * scaleY;
+      const clickedGrid = pixelToGrid(clickX, clickY);
+
+      if (!clickedGrid || !isPlayerDeployCell(clickedGrid.col, clickedGrid.row)) {
+        return;
+      }
+
+      const existingPlayerIndex = playerUnits.findIndex(function (unit) {
+        return unit.col === clickedGrid.col && unit.row === clickedGrid.row;
+      });
+
+      if (existingPlayerIndex >= 0) {
+        playerUnits.splice(existingPlayerIndex, 1);
+        return;
+      }
+
+      if (getUnitAtGrid(clickedGrid.col, clickedGrid.row)) {
+        return;
+      }
+
+      playerUnits.push(createUnit("player", selectedUnitType, clickedGrid.col, clickedGrid.row));
+    });
+
+    swordsmanButton.addEventListener("click", function () {
+      selectedUnitType = "swordsman";
+      syncToolbar();
+    });
+
+    archerButton.addEventListener("click", function () {
+      selectedUnitType = "archer";
+      syncToolbar();
+    });
+
+    startBattleButton.addEventListener("click", function () {
+      gameState = "battle";
+      syncToolbar();
+    });
+
+    /**
+     * 根据当前状态刷新底部按钮样式。
+     */
+    function syncToolbar() {
+      swordsmanButton.classList.toggle("selected", selectedUnitType === "swordsman");
+      archerButton.classList.toggle("selected", selectedUnitType === "archer");
+      stateLabel.textContent = gameState;
+
+      const isDeploy = gameState === "deploy";
+      swordsmanButton.disabled = !isDeploy;
+      archerButton.disabled = !isDeploy;
+      startBattleButton.disabled = !isDeploy;
+    }
+
     /**
      * update 用来更新游戏状态。
-     * 第6步只调整战场布局，不处理放兵、开始战斗或攻击逻辑。
+     * 第7步只处理布阵，不处理移动和战斗。
      *
      * @param {number} deltaTime 距离上一帧过去了多少秒
      */
@@ -179,6 +416,7 @@
       context.fillRect(0, 0, canvas.width, canvas.height);
 
       drawBattlefield(context);
+      drawUnits(context);
       drawDebugInfo(context);
     }
 
@@ -213,8 +451,11 @@
       if (mouse.grid) {
         const tileX = battlefield.offsetX + mouse.grid.col * battlefield.tileSize;
         const tileY = battlefield.offsetY + mouse.grid.row * battlefield.tileSize;
+        const isDeployCell = isPlayerDeployCell(mouse.grid.col, mouse.grid.row);
 
-        context.fillStyle = "rgba(250, 204, 21, 0.34)";
+        context.fillStyle = isDeployCell
+          ? "rgba(250, 204, 21, 0.34)"
+          : "rgba(148, 163, 184, 0.22)";
         context.fillRect(tileX, tileY, battlefield.tileSize, battlefield.tileSize);
       }
 
@@ -319,6 +560,55 @@
     }
 
     /**
+     * 绘制玩家和敌方单位。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     */
+    function drawUnits(context) {
+      for (const unit of enemyUnits) {
+        drawUnit(context, unit);
+      }
+
+      for (const unit of playerUnits) {
+        drawUnit(context, unit);
+      }
+    }
+
+    /**
+     * 绘制单个单位。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     * @param {object} unit 单位数据
+     */
+    function drawUnit(context, unit) {
+      const center = gridToPixel(unit.col, unit.row);
+      const radius = battlefield.tileSize * 0.32;
+
+      context.fillStyle = unit.team === "player" ? "#3b82f6" : "#ef4444";
+      context.beginPath();
+      context.arc(center.x, center.y, radius, 0, Math.PI * 2);
+      context.fill();
+
+      context.strokeStyle = unit.type === "melee" ? "#e2e8f0" : "#facc15";
+      context.lineWidth = 2;
+      context.stroke();
+
+      context.fillStyle = "#f8fafc";
+      context.font = "12px Arial, Microsoft YaHei, sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(unit.type === "melee" ? "剑" : "弓", center.x, center.y);
+
+      context.fillStyle = "#cbd5e1";
+      context.font = "11px Arial, Microsoft YaHei, sans-serif";
+      context.textBaseline = "top";
+      context.fillText(unit.name, center.x, center.y + radius + 3);
+
+      context.textAlign = "left";
+      context.textBaseline = "alphabetic";
+    }
+
+    /**
      * 绘制标题、FPS、deltaTime、运行时间和鼠标所在格子。
      *
      * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
@@ -326,7 +616,7 @@
     function drawDebugInfo(context) {
       context.fillStyle = "#f8fafc";
       context.font = "20px Arial, Microsoft YaHei, sans-serif";
-      context.fillText("小小帝国式战场布局 - 第6步", 24, 32);
+      context.fillText("玩家布阵阶段 - 第7步", 24, 32);
 
       context.font = "16px Consolas, Microsoft YaHei, monospace";
       context.fillStyle = "#38bdf8";
@@ -340,6 +630,10 @@
       } else {
         context.fillText("grid: (-, -)", 24, 58);
       }
+
+      context.fillStyle = "#cbd5e1";
+      context.fillText(`state: ${gameState}`, 24, 80);
+      context.fillText(`selected: ${unitConfigs[selectedUnitType].name}`, 24, 102);
     }
 
     /**
@@ -362,6 +656,7 @@
     }
 
     updateBattlefieldLayout();
+    syncToolbar();
     requestAnimationFrame(gameLoop);
   </script>
 </body>
