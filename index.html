@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>策略游戏引擎 - 第5步</title>
+  <title>小小帝国式战场 - 第6步</title>
   <style>
     /* 让页面占满浏览器窗口，并使用深色背景 */
     html,
@@ -50,20 +50,20 @@
     // 当前帧率，方便在画面上显示调试信息
     let fps = 0;
 
-    // 地图配置：15列、10行，每个格子 48px
-    const map = {
-      cols: 15,
-      rows: 10,
-      tileSize: 48
+    // 单独保存给 render 显示用的 deltaTime
+    let deltaTimeForDisplay = 0;
+
+    // 战场配置：6行 x 19列
+    const battlefield = {
+      rows: 6,
+      cols: 19,
+      playerStartCol: 0,
+      playerEndCol: 8,
+      separatorCol: 9,
+      enemyStartCol: 10,
+      enemyEndCol: 18,
+      padding: 56
     };
-
-    // 根据地图尺寸计算像素宽高
-    map.width = map.cols * map.tileSize;
-    map.height = map.rows * map.tileSize;
-
-    // 让地图绘制在 canvas 中间
-    map.offsetX = (canvas.width - map.width) / 2;
-    map.offsetY = (canvas.height - map.height) / 2;
 
     // 鼠标当前所在位置和格子坐标
     const mouse = {
@@ -72,256 +72,23 @@
       grid: null
     };
 
-    // 当前被选中的玩家单位
-    let selectedUnit = null;
-
-    // 攻击特效列表：攻击发生时短暂画一条线
-    let attackEffects = [];
-
     /**
-     * Unit 表示一个地图上的战斗单位。
-     * 现在保存属性、负责绘制，并支持直线平滑移动。
+     * 根据 canvas 大小自动计算格子尺寸，并让战场居中。
+     * 这里让格子保持正方形，所以取可用宽度和可用高度中较小的那个尺寸。
      */
-    class Unit {
-      /**
-       * @param {object} options 单位配置
-       * @param {number} options.id 单位唯一编号
-       * @param {string} options.name 单位名称
-       * @param {"player" | "enemy"} options.team 所属阵营
-       * @param {number} options.col 所在列
-       * @param {number} options.row 所在行
-       * @param {number} options.hp 当前生命值
-       * @param {number} options.maxHp 最大生命值
-       * @param {number} options.attack 攻击力
-       * @param {number} options.speed 速度
-       * @param {number} [options.attackRange] 攻击范围，单位：像素
-       * @param {number} [options.attackCooldown] 攻击冷却，单位：秒
-       */
-      constructor(options) {
-        this.id = options.id;
-        this.name = options.name;
-        this.team = options.team;
-        this.col = options.col;
-        this.row = options.row;
-        this.hp = options.hp;
-        this.maxHp = options.maxHp;
-        this.attack = options.attack;
-        this.speed = options.speed;
-        this.attackRange = options.attackRange || 70;
-        this.attackCooldown = options.attackCooldown || 0.8;
-        this.attackTimer = 0;
-        this.alive = true;
+    function updateBattlefieldLayout() {
+      const availableWidth = canvas.width - battlefield.padding * 2;
+      const availableHeight = canvas.height - battlefield.padding * 2;
+      battlefield.tileSize = Math.floor(Math.min(
+        availableWidth / battlefield.cols,
+        availableHeight / battlefield.rows
+      ));
 
-        // x、y 表示单位当前的像素位置。初始位置就是所在格子的中心点。
-        const position = gridToPixel(this.col, this.row);
-        this.x = position.x;
-        this.y = position.y;
-
-        // targetX、targetY 表示移动目标的像素位置。
-        this.targetX = this.x;
-        this.targetY = this.y;
-
-        // targetCol、targetRow 用来在到达目标后更新网格坐标。
-        this.targetCol = this.col;
-        this.targetRow = this.row;
-
-        // isMoving 表示单位当前是否正在移动。
-        this.isMoving = false;
-      }
-
-      /**
-       * 设置单位的移动目标。
-       *
-       * @param {number} col 目标列
-       * @param {number} row 目标行
-       */
-      moveTo(col, row) {
-        const targetPosition = gridToPixel(col, row);
-
-        this.targetX = targetPosition.x;
-        this.targetY = targetPosition.y;
-        this.targetCol = col;
-        this.targetRow = row;
-        this.isMoving = true;
-      }
-
-      /**
-       * 根据 deltaTime 更新单位位置。
-       *
-       * @param {number} deltaTime 距离上一帧过去了多少秒
-       */
-      update(deltaTime) {
-        if (!this.alive) {
-          return;
-        }
-
-        // 攻击计时器每帧递减，降到 0 后才可以再次攻击。
-        if (this.attackTimer > 0) {
-          this.attackTimer -= deltaTime;
-        }
-
-        if (!this.isMoving) {
-          return;
-        }
-
-        const dx = this.targetX - this.x;
-        const dy = this.targetY - this.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        // speed 使用“每秒移动几个格子”的概念，乘以 tileSize 得到每秒像素速度。
-        const pixelsPerSecond = this.speed * map.tileSize;
-        const moveDistance = pixelsPerSecond * deltaTime;
-
-        // 如果这一帧可以走到或超过目标，就直接停在目标中心。
-        if (distance <= moveDistance) {
-          this.x = this.targetX;
-          this.y = this.targetY;
-          this.col = this.targetCol;
-          this.row = this.targetRow;
-          this.isMoving = false;
-          return;
-        }
-
-        // 单位方向向量乘以本帧移动距离，得到这一帧的新位置。
-        this.x += (dx / distance) * moveDistance;
-        this.y += (dy / distance) * moveDistance;
-      }
-
-      /**
-       * 绘制单位本体、血条和名称。
-       *
-       * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
-       */
-      draw(context) {
-        if (!this.alive) {
-          return;
-        }
-
-        const radius = 15;
-        const hpBarWidth = 34;
-        const hpBarHeight = 5;
-        const hpPercent = Math.max(0, this.hp / this.maxHp);
-
-        // 玩家单位为蓝色，敌人单位为红色
-        context.fillStyle = this.team === "player" ? "#3b82f6" : "#ef4444";
-        context.beginPath();
-        context.arc(this.x, this.y, radius, 0, Math.PI * 2);
-        context.fill();
-
-        // 给单位加一圈描边，让它在地图上更清楚
-        context.strokeStyle = this === selectedUnit ? "#facc15" : "#e2e8f0";
-        context.lineWidth = this === selectedUnit ? 4 : 2;
-        context.stroke();
-
-        // 血条背景
-        const hpBarX = this.x - hpBarWidth / 2;
-        const hpBarY = this.y - radius - 11;
-        context.fillStyle = "#1f2937";
-        context.fillRect(hpBarX, hpBarY, hpBarWidth, hpBarHeight);
-
-        // 当前血量
-        context.fillStyle = "#22c55e";
-        context.fillRect(hpBarX, hpBarY, hpBarWidth * hpPercent, hpBarHeight);
-
-        // 血条外框
-        context.strokeStyle = "#cbd5e1";
-        context.lineWidth = 1;
-        context.strokeRect(hpBarX, hpBarY, hpBarWidth, hpBarHeight);
-
-        // 单位名称
-        context.fillStyle = "#f8fafc";
-        context.font = "12px Arial, Microsoft YaHei, sans-serif";
-        context.textAlign = "center";
-        context.textBaseline = "top";
-        context.fillText(this.name, this.x, this.y + radius + 5);
-
-        // 恢复常用文字对齐方式，避免影响其他调试文字
-        context.textAlign = "left";
-        context.textBaseline = "alphabetic";
-      }
+      battlefield.width = battlefield.cols * battlefield.tileSize;
+      battlefield.height = battlefield.rows * battlefield.tileSize;
+      battlefield.offsetX = (canvas.width - battlefield.width) / 2;
+      battlefield.offsetY = (canvas.height - battlefield.height) / 2;
     }
-
-    // 初始创建：3个玩家士兵，3个敌人士兵
-    let units = [
-      new Unit({
-        id: 1,
-        name: "玩家1",
-        team: "player",
-        col: 2,
-        row: 3,
-        hp: 100,
-        maxHp: 100,
-        attack: 15,
-        speed: 3,
-        attackRange: 70,
-        attackCooldown: 0.8
-      }),
-      new Unit({
-        id: 2,
-        name: "玩家2",
-        team: "player",
-        col: 3,
-        row: 5,
-        hp: 90,
-        maxHp: 100,
-        attack: 12,
-        speed: 4,
-        attackRange: 70,
-        attackCooldown: 0.8
-      }),
-      new Unit({
-        id: 3,
-        name: "玩家3",
-        team: "player",
-        col: 4,
-        row: 7,
-        hp: 80,
-        maxHp: 100,
-        attack: 18,
-        speed: 2,
-        attackRange: 70,
-        attackCooldown: 0.8
-      }),
-      new Unit({
-        id: 4,
-        name: "敌人1",
-        team: "enemy",
-        col: 10,
-        row: 3,
-        hp: 100,
-        maxHp: 100,
-        attack: 14,
-        speed: 3,
-        attackRange: 70,
-        attackCooldown: 0.8
-      }),
-      new Unit({
-        id: 5,
-        name: "敌人2",
-        team: "enemy",
-        col: 11,
-        row: 5,
-        hp: 85,
-        maxHp: 100,
-        attack: 16,
-        speed: 3,
-        attackRange: 70,
-        attackCooldown: 0.8
-      }),
-      new Unit({
-        id: 6,
-        name: "敌人3",
-        team: "enemy",
-        col: 12,
-        row: 7,
-        hp: 95,
-        maxHp: 100,
-        attack: 13,
-        speed: 4,
-        attackRange: 70,
-        attackCooldown: 0.8
-      })
-    ];
 
     /**
      * 网格坐标转像素坐标。
@@ -333,30 +100,35 @@
      */
     function gridToPixel(col, row) {
       return {
-        x: map.offsetX + col * map.tileSize + map.tileSize / 2,
-        y: map.offsetY + row * map.tileSize + map.tileSize / 2
+        x: battlefield.offsetX + col * battlefield.tileSize + battlefield.tileSize / 2,
+        y: battlefield.offsetY + row * battlefield.tileSize + battlefield.tileSize / 2
       };
     }
 
     /**
      * 像素坐标转网格坐标。
-     * 如果像素位置不在地图内，返回 null。
+     * 如果像素位置不在战场内，返回 null。
      *
      * @param {number} x canvas 内的像素 x 坐标
      * @param {number} y canvas 内的像素 y 坐标
      * @returns {{col: number, row: number} | null} 网格坐标
      */
     function pixelToGrid(x, y) {
-      const localX = x - map.offsetX;
-      const localY = y - map.offsetY;
+      const localX = x - battlefield.offsetX;
+      const localY = y - battlefield.offsetY;
 
-      if (localX < 0 || localY < 0 || localX >= map.width || localY >= map.height) {
+      if (
+        localX < 0 ||
+        localY < 0 ||
+        localX >= battlefield.width ||
+        localY >= battlefield.height
+      ) {
         return null;
       }
 
       return {
-        col: Math.floor(localX / map.tileSize),
-        row: Math.floor(localY / map.tileSize)
+        col: Math.floor(localX / battlefield.tileSize),
+        row: Math.floor(localY / battlefield.tileSize)
       };
     }
 
@@ -376,37 +148,9 @@
       mouse.grid = null;
     });
 
-    // 点击玩家单位可以选中；选中后点击空格子可以移动。
-    canvas.addEventListener("click", function (event) {
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const clickX = (event.clientX - rect.left) * scaleX;
-      const clickY = (event.clientY - rect.top) * scaleY;
-      const clickedGrid = pixelToGrid(clickX, clickY);
-
-      if (!clickedGrid) {
-        return;
-      }
-
-      const clickedUnit = getUnitAtPosition(clickX, clickY);
-      const unitOnTargetGrid = getUnitAtGrid(clickedGrid.col, clickedGrid.row);
-
-      // 只能选中玩家单位，敌人单位暂时不能被控制。
-      if (clickedUnit && clickedUnit.team === "player") {
-        selectedUnit = clickedUnit;
-        return;
-      }
-
-      // 已经选中玩家单位时，点击没有单位的格子就开始移动。
-      if (selectedUnit && !unitOnTargetGrid) {
-        selectedUnit.moveTo(clickedGrid.col, clickedGrid.row);
-      }
-    });
-
     /**
      * update 用来更新游戏状态。
-     * 以后地图、单位、移动、战斗等逻辑都会放到这里或从这里调用。
+     * 第6步只调整战场布局，不处理放兵、开始战斗或攻击逻辑。
      *
      * @param {number} deltaTime 距离上一帧过去了多少秒
      */
@@ -417,22 +161,6 @@
       // 这里做一个简单保护，避免 deltaTime 为 0 时出现异常。
       if (deltaTime > 0) {
         fps = 1 / deltaTime;
-      }
-
-      for (const unit of units) {
-        unit.update(deltaTime);
-      }
-
-      handleCombat(deltaTime);
-      updateAttackEffects(deltaTime);
-
-      // hp <= 0 的单位不再参与渲染和逻辑。
-      units = units.filter(function (unit) {
-        return unit.alive;
-      });
-
-      if (selectedUnit && !selectedUnit.alive) {
-        selectedUnit = null;
       }
     }
 
@@ -450,234 +178,168 @@
       context.fillStyle = "#0f172a";
       context.fillRect(0, 0, canvas.width, canvas.height);
 
-      drawMap(context);
-      drawAttackEffects(context);
-      drawUnits(context);
+      drawBattlefield(context);
+      drawDebugInfo(context);
+    }
 
-      // 绘制标题
+    /**
+     * 绘制小小帝国式横向战场。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     */
+    function drawBattlefield(context) {
+      drawArea(
+        context,
+        battlefield.playerStartCol,
+        battlefield.playerEndCol,
+        "rgba(59, 130, 246, 0.20)"
+      );
+
+      drawArea(
+        context,
+        battlefield.separatorCol,
+        battlefield.separatorCol,
+        "rgba(15, 23, 42, 0.92)"
+      );
+
+      drawArea(
+        context,
+        battlefield.enemyStartCol,
+        battlefield.enemyEndCol,
+        "rgba(239, 68, 68, 0.20)"
+      );
+
+      // 鼠标在战场内时，高亮当前格子
+      if (mouse.grid) {
+        const tileX = battlefield.offsetX + mouse.grid.col * battlefield.tileSize;
+        const tileY = battlefield.offsetY + mouse.grid.row * battlefield.tileSize;
+
+        context.fillStyle = "rgba(250, 204, 21, 0.34)";
+        context.fillRect(tileX, tileY, battlefield.tileSize, battlefield.tileSize);
+      }
+
+      drawGridLines(context);
+      drawBattlefieldLabels(context);
+    }
+
+    /**
+     * 绘制某一段列区域。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     * @param {number} startCol 开始列
+     * @param {number} endCol 结束列
+     * @param {string} color 填充颜色
+     */
+    function drawArea(context, startCol, endCol, color) {
+      const x = battlefield.offsetX + startCol * battlefield.tileSize;
+      const width = (endCol - startCol + 1) * battlefield.tileSize;
+
+      context.fillStyle = color;
+      context.fillRect(x, battlefield.offsetY, width, battlefield.height);
+    }
+
+    /**
+     * 绘制战场网格线和外框。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     */
+    function drawGridLines(context) {
+      context.strokeStyle = "#475569";
+      context.lineWidth = 1;
+
+      for (let col = 0; col <= battlefield.cols; col++) {
+        const x = battlefield.offsetX + col * battlefield.tileSize;
+        context.beginPath();
+        context.moveTo(x, battlefield.offsetY);
+        context.lineTo(x, battlefield.offsetY + battlefield.height);
+        context.stroke();
+      }
+
+      for (let row = 0; row <= battlefield.rows; row++) {
+        const y = battlefield.offsetY + row * battlefield.tileSize;
+        context.beginPath();
+        context.moveTo(battlefield.offsetX, y);
+        context.lineTo(battlefield.offsetX + battlefield.width, y);
+        context.stroke();
+      }
+
+      // 加粗隔离列左右边界，让中线更明确
+      context.strokeStyle = "#cbd5e1";
+      context.lineWidth = 2;
+      const separatorLeft = battlefield.offsetX + battlefield.separatorCol * battlefield.tileSize;
+      const separatorRight = separatorLeft + battlefield.tileSize;
+
+      context.beginPath();
+      context.moveTo(separatorLeft, battlefield.offsetY);
+      context.lineTo(separatorLeft, battlefield.offsetY + battlefield.height);
+      context.stroke();
+
+      context.beginPath();
+      context.moveTo(separatorRight, battlefield.offsetY);
+      context.lineTo(separatorRight, battlefield.offsetY + battlefield.height);
+      context.stroke();
+
+      // 绘制战场外框
+      context.strokeStyle = "#94a3b8";
+      context.lineWidth = 2;
+      context.strokeRect(
+        battlefield.offsetX,
+        battlefield.offsetY,
+        battlefield.width,
+        battlefield.height
+      );
+    }
+
+    /**
+     * 绘制区域标签，帮助确认左右布阵区和中间隔离列。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     */
+    function drawBattlefieldLabels(context) {
+      context.textAlign = "center";
+      context.textBaseline = "bottom";
+      context.font = "15px Arial, Microsoft YaHei, sans-serif";
+
+      const labelY = battlefield.offsetY - 10;
+      const playerCenterX = battlefield.offsetX + 4.5 * battlefield.tileSize;
+      const separatorCenterX = battlefield.offsetX + 9.5 * battlefield.tileSize;
+      const enemyCenterX = battlefield.offsetX + 14.5 * battlefield.tileSize;
+
+      context.fillStyle = "#93c5fd";
+      context.fillText("玩家布阵区 6x9", playerCenterX, labelY);
+
+      context.fillStyle = "#cbd5e1";
+      context.fillText("隔离列", separatorCenterX, labelY);
+
+      context.fillStyle = "#fca5a5";
+      context.fillText("敌人布阵区 6x9", enemyCenterX, labelY);
+
+      context.textAlign = "left";
+      context.textBaseline = "alphabetic";
+    }
+
+    /**
+     * 绘制标题、FPS、deltaTime、运行时间和鼠标所在格子。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     */
+    function drawDebugInfo(context) {
       context.fillStyle = "#f8fafc";
       context.font = "20px Arial, Microsoft YaHei, sans-serif";
-      context.fillText("战斗系统 - 第5步", 24, 32);
+      context.fillText("小小帝国式战场布局 - 第6步", 24, 32);
 
-      // 绘制调试信息
       context.font = "16px Consolas, Microsoft YaHei, monospace";
       context.fillStyle = "#38bdf8";
       context.fillText(`FPS: ${fps.toFixed(1)}`, 640, 18);
       context.fillText(`deltaTime: ${deltaTimeForDisplay.toFixed(4)} 秒`, 640, 37);
       context.fillText(`当前运行时间: ${runningTime.toFixed(2)} 秒`, 640, 56);
 
-      // 显示鼠标当前所在格子的网格坐标
       context.fillStyle = "#facc15";
       if (mouse.grid) {
-        context.fillText(`grid: (${mouse.grid.col}, ${mouse.grid.row})`, 24, 54);
+        context.fillText(`grid: (${mouse.grid.col}, ${mouse.grid.row})`, 24, 58);
       } else {
-        context.fillText("grid: (-, -)", 24, 54);
+        context.fillText("grid: (-, -)", 24, 58);
       }
-
-      if (selectedUnit) {
-        context.fillStyle = "#facc15";
-        context.fillText(`selected: ${selectedUnit.name}`, 24, 76);
-      }
-    }
-
-    // 单独保存给 render 显示用的 deltaTime
-    let deltaTimeForDisplay = 0;
-
-    /**
-     * 绘制地图网格和鼠标悬停高亮。
-     *
-     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
-     */
-    function drawMap(context) {
-      // 绘制地图底色
-      context.fillStyle = "#1e293b";
-      context.fillRect(map.offsetX, map.offsetY, map.width, map.height);
-
-      // 鼠标在地图内时，高亮当前格子
-      if (mouse.grid) {
-        const tileX = map.offsetX + mouse.grid.col * map.tileSize;
-        const tileY = map.offsetY + mouse.grid.row * map.tileSize;
-
-        context.fillStyle = "rgba(250, 204, 21, 0.28)";
-        context.fillRect(tileX, tileY, map.tileSize, map.tileSize);
-      }
-
-      // 绘制网格线
-      context.strokeStyle = "#475569";
-      context.lineWidth = 1;
-
-      for (let col = 0; col <= map.cols; col++) {
-        const x = map.offsetX + col * map.tileSize;
-        context.beginPath();
-        context.moveTo(x, map.offsetY);
-        context.lineTo(x, map.offsetY + map.height);
-        context.stroke();
-      }
-
-      for (let row = 0; row <= map.rows; row++) {
-        const y = map.offsetY + row * map.tileSize;
-        context.beginPath();
-        context.moveTo(map.offsetX, y);
-        context.lineTo(map.offsetX + map.width, y);
-        context.stroke();
-      }
-
-      // 绘制地图外框，让地图边界更清楚
-      context.strokeStyle = "#94a3b8";
-      context.lineWidth = 2;
-      context.strokeRect(map.offsetX, map.offsetY, map.width, map.height);
-    }
-
-    /**
-     * 绘制全部单位。
-     *
-     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
-     */
-    function drawUnits(context) {
-      for (const unit of units) {
-        unit.draw(context);
-      }
-    }
-
-    /**
-     * 处理所有单位的自动攻击。
-     * 玩家和敌人都会寻找射程内最近的敌对单位。
-     *
-     * @param {number} deltaTime 距离上一帧过去了多少秒
-     */
-    function handleCombat(deltaTime) {
-      for (const attacker of units) {
-        if (!attacker.alive || attacker.attackTimer > 0) {
-          continue;
-        }
-
-        const target = findNearestEnemyInRange(attacker);
-
-        if (target) {
-          attacker.attackTimer = attacker.attackCooldown;
-          target.hp -= attacker.attack;
-
-          attackEffects.push({
-            fromX: attacker.x,
-            fromY: attacker.y,
-            toX: target.x,
-            toY: target.y,
-            timeLeft: 0.16,
-            duration: 0.16
-          });
-
-          if (target.hp <= 0) {
-            target.hp = 0;
-            target.alive = false;
-          }
-        }
-      }
-    }
-
-    /**
-     * 查找攻击者射程内最近的敌方单位。
-     *
-     * @param {Unit} attacker 攻击者
-     * @returns {Unit | null} 射程内最近的敌人
-     */
-    function findNearestEnemyInRange(attacker) {
-      let nearestEnemy = null;
-      let nearestDistance = Infinity;
-
-      for (const target of units) {
-        if (!target.alive || target.team === attacker.team) {
-          continue;
-        }
-
-        const distance = getDistance(attacker, target);
-
-        if (distance < attacker.attackRange && distance < nearestDistance) {
-          nearestEnemy = target;
-          nearestDistance = distance;
-        }
-      }
-
-      return nearestEnemy;
-    }
-
-    /**
-     * 计算两个单位之间的像素距离。
-     *
-     * @param {Unit} unitA 第一个单位
-     * @param {Unit} unitB 第二个单位
-     * @returns {number} 两个单位中心点之间的距离
-     */
-    function getDistance(unitA, unitB) {
-      const dx = unitA.x - unitB.x;
-      const dy = unitA.y - unitB.y;
-      return Math.sqrt(dx * dx + dy * dy);
-    }
-
-    /**
-     * 更新攻击线特效的剩余时间。
-     *
-     * @param {number} deltaTime 距离上一帧过去了多少秒
-     */
-    function updateAttackEffects(deltaTime) {
-      for (const effect of attackEffects) {
-        effect.timeLeft -= deltaTime;
-      }
-
-      attackEffects = attackEffects.filter(function (effect) {
-        return effect.timeLeft > 0;
-      });
-    }
-
-    /**
-     * 绘制短暂攻击线，帮助观察谁正在攻击谁。
-     *
-     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
-     */
-    function drawAttackEffects(context) {
-      for (const effect of attackEffects) {
-        const alpha = effect.timeLeft / effect.duration;
-
-        context.strokeStyle = `rgba(250, 204, 21, ${alpha})`;
-        context.lineWidth = 3;
-        context.beginPath();
-        context.moveTo(effect.fromX, effect.fromY);
-        context.lineTo(effect.toX, effect.toY);
-        context.stroke();
-      }
-    }
-
-    /**
-     * 根据网格坐标查找这个格子上是否有单位。
-     *
-     * @param {number} col 第几列
-     * @param {number} row 第几行
-     * @returns {Unit | undefined} 找到的单位
-     */
-    function getUnitAtGrid(col, row) {
-      return units.find(function (unit) {
-        return unit.alive && unit.col === col && unit.row === row;
-      });
-    }
-
-    /**
-     * 根据像素坐标判断是否点中了某个单位。
-     *
-     * @param {number} x canvas 内的像素 x 坐标
-     * @param {number} y canvas 内的像素 y 坐标
-     * @returns {Unit | undefined} 找到的单位
-     */
-    function getUnitAtPosition(x, y) {
-      const hitRadius = 18;
-
-      return units.find(function (unit) {
-        if (!unit.alive) {
-          return false;
-        }
-
-        const dx = unit.x - x;
-        const dy = unit.y - y;
-        return Math.sqrt(dx * dx + dy * dy) <= hitRadius;
-      });
     }
 
     /**
@@ -699,7 +361,7 @@
       requestAnimationFrame(gameLoop);
     }
 
-    // 启动游戏循环
+    updateBattlefieldLayout();
     requestAnimationFrame(gameLoop);
   </script>
 </body>
