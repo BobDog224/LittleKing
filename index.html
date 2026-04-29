@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>小小帝国式战场 - 第9步</title>
+  <title>小小帝国式战场 - 第10步</title>
   <style>
     /* 让页面占满浏览器窗口，并使用深色背景 */
     html,
@@ -139,7 +139,7 @@
       padding: 56
     };
 
-    // 兵种配置。第9步只用来创建、显示、移动和选择目标，不处理扣血。
+    // 兵种配置。第10步开始处理自动攻击、扣血和死亡。
     const unitConfigs = {
       swordsman: {
         name: "剑士",
@@ -158,7 +158,7 @@
         attack: 15,
         speed: 30,
         attackRange: 4,
-        attackCooldown: 0.8,
+        attackCooldown: 1.2,
         attackRows: [-1, 0, 1]
       }
     };
@@ -169,6 +169,9 @@
       y: 0,
       grid: null
     };
+
+    // 攻击特效列表，远程攻击会短暂画一条飞行线。
+    let attackEffects = [];
 
     // 玩家布阵单位和敌方固定单位
     const playerUnits = [];
@@ -211,7 +214,9 @@
         direction: team === "player" ? 1 : -1,
         hasReachedEnd: false,
         alive: true,
-        target: null
+        target: null,
+        attackTimer: 0,
+        flashTimer: 0
       };
     }
 
@@ -427,7 +432,7 @@
 
     /**
      * update 用来更新游戏状态。
-     * 第9步处理布阵后的自动横向移动和目标选择，暂时不处理扣血。
+     * 第10步处理布阵后的移动、自动攻击和攻击特效。
      *
      * @param {number} deltaTime 距离上一帧过去了多少秒
      */
@@ -441,50 +446,146 @@
       }
 
       if (gameState === "battle") {
-        updateBattleMovement(deltaTime);
+        updateBattle(deltaTime);
       }
     }
 
     /**
-     * battle 阶段双方单位沿所在行水平移动。
-     * 玩家向右，敌人向左；到达对方底线后停住。
+     * battle 阶段更新全部单位。
+     * 有目标时停止移动并按冷却攻击；没有目标时继续向前移动。
      *
      * @param {number} deltaTime 距离上一帧过去了多少秒
      */
-    function updateBattleMovement(deltaTime) {
+    function updateBattle(deltaTime) {
       for (const unit of getAllUnits()) {
-        unit.target = findTargetForUnit(unit);
-
-        if (unit.target) {
+        if (!unit.alive) {
           continue;
         }
 
-        if (unit.hasReachedEnd) {
+        unit.attackTimer = Math.max(0, unit.attackTimer - deltaTime);
+        unit.flashTimer = Math.max(0, unit.flashTimer - deltaTime);
+
+        if (!isTargetValid(unit, unit.target)) {
+          unit.target = findTargetForUnit(unit);
+        }
+
+        if (unit.target && isTargetValid(unit, unit.target)) {
+          attackTarget(unit, unit.target);
           continue;
         }
 
-        const endCol = unit.team === "player"
-          ? battlefield.enemyEndCol
-          : battlefield.playerStartCol;
-        const endX = gridToPixel(endCol, unit.row).x;
-        const moveDistance = unit.speed * deltaTime * unit.direction;
+        updateUnitMovement(unit, deltaTime);
+      }
 
-        unit.x += moveDistance;
+      updateAttackEffects(deltaTime);
+      removeDeadUnits(playerUnits);
+      removeDeadUnits(enemyUnits);
+    }
 
-        if (unit.team === "player" && unit.x >= endX) {
-          unit.x = endX;
-          unit.hasReachedEnd = true;
+    /**
+     * 从单位数组中移除死亡单位。
+     *
+     * @param {object[]} units 单位数组
+     */
+    function removeDeadUnits(units) {
+      for (let i = units.length - 1; i >= 0; i--) {
+        if (!units[i].alive) {
+          units.splice(i, 1);
         }
+      }
+    }
 
-        if (unit.team === "enemy" && unit.x <= endX) {
-          unit.x = endX;
-          unit.hasReachedEnd = true;
-        }
+    /**
+     * 没有目标时，单位沿所在行水平前进。
+     *
+     * @param {object} unit 单位数据
+     * @param {number} deltaTime 距离上一帧过去了多少秒
+     */
+    function updateUnitMovement(unit, deltaTime) {
+      if (unit.hasReachedEnd) {
+        return;
+      }
 
-        const currentGrid = pixelToGrid(unit.x, unit.y);
-        if (currentGrid) {
-          unit.col = currentGrid.col;
-          unit.row = currentGrid.row;
+      const endCol = unit.team === "player"
+        ? battlefield.enemyEndCol
+        : battlefield.playerStartCol;
+      const endX = gridToPixel(endCol, unit.row).x;
+      const moveDistance = unit.speed * deltaTime * unit.direction;
+
+      unit.x += moveDistance;
+
+      if (unit.team === "player" && unit.x >= endX) {
+        unit.x = endX;
+        unit.hasReachedEnd = true;
+      }
+
+      if (unit.team === "enemy" && unit.x <= endX) {
+        unit.x = endX;
+        unit.hasReachedEnd = true;
+      }
+
+      const currentGrid = pixelToGrid(unit.x, unit.y);
+      if (currentGrid) {
+        unit.col = currentGrid.col;
+        unit.row = currentGrid.row;
+      }
+    }
+
+    /**
+     * 判断目标是否仍然有效：存活、敌方、行范围符合、横向距离仍在攻击范围内。
+     *
+     * @param {object} unit 攻击者
+     * @param {object | null} target 当前目标
+     * @returns {boolean} 目标是否有效
+     */
+    function isTargetValid(unit, target) {
+      if (!target || !target.alive || target.team === unit.team) {
+        return false;
+      }
+
+      const rowOffset = target.row - unit.row;
+      if (!unit.attackRows.includes(rowOffset)) {
+        return false;
+      }
+
+      return getHorizontalDistanceInTiles(unit, target) <= unit.attackRange;
+    }
+
+    /**
+     * 单位攻击目标。只有 attackTimer 为 0 时才真正造成伤害。
+     *
+     * @param {object} attacker 攻击者
+     * @param {object} target 目标
+     */
+    function attackTarget(attacker, target) {
+      if (attacker.attackTimer > 0) {
+        return;
+      }
+
+      attacker.attackTimer = attacker.attackCooldown;
+      target.hp -= attacker.attack;
+      target.flashTimer = 0.16;
+
+      if (attacker.type === "ranged") {
+        attackEffects.push({
+          fromX: attacker.x,
+          fromY: attacker.y,
+          toX: target.x,
+          toY: target.y,
+          timeLeft: 0.18,
+          duration: 0.18
+        });
+      }
+
+      if (target.hp <= 0) {
+        target.hp = 0;
+        target.alive = false;
+        target.target = null;
+
+        for (const unit of getAllUnits()) {
+          if (unit.target === target) {
+            unit.target = null;
+          }
         }
       }
     }
@@ -501,20 +602,11 @@
       let nearestDistance = Infinity;
 
       for (const target of getEnemyUnitsFor(unit)) {
-        if (!target.alive) {
+        if (!isTargetValid(unit, target)) {
           continue;
         }
 
-        const rowOffset = target.row - unit.row;
-        if (!unit.attackRows.includes(rowOffset)) {
-          continue;
-        }
-
-        const horizontalDistanceInTiles = Math.abs(target.x - unit.x) / battlefield.tileSize;
-        if (horizontalDistanceInTiles > unit.attackRange) {
-          continue;
-        }
-
+        const horizontalDistanceInTiles = getHorizontalDistanceInTiles(unit, target);
         if (horizontalDistanceInTiles < nearestDistance) {
           nearestDistance = horizontalDistanceInTiles;
           nearestTarget = target;
@@ -522,6 +614,32 @@
       }
 
       return nearestTarget;
+    }
+
+    /**
+     * 计算两个单位的横向距离，单位是格子数。
+     *
+     * @param {object} unitA 第一个单位
+     * @param {object} unitB 第二个单位
+     * @returns {number} 横向距离，单位：格子
+     */
+    function getHorizontalDistanceInTiles(unitA, unitB) {
+      return Math.abs(unitA.x - unitB.x) / battlefield.tileSize;
+    }
+
+    /**
+     * 更新远程攻击线特效。
+     *
+     * @param {number} deltaTime 距离上一帧过去了多少秒
+     */
+    function updateAttackEffects(deltaTime) {
+      for (const effect of attackEffects) {
+        effect.timeLeft -= deltaTime;
+      }
+
+      attackEffects = attackEffects.filter(function (effect) {
+        return effect.timeLeft > 0;
+      });
     }
 
     /**
@@ -540,6 +658,7 @@
 
       drawBattlefield(context);
       drawTargetLines(context);
+      drawAttackEffects(context);
       drawUnits(context);
       drawDebugInfo(context);
     }
@@ -690,10 +809,18 @@
      */
     function drawUnits(context) {
       for (const unit of enemyUnits) {
+        if (!unit.alive) {
+          continue;
+        }
+
         drawUnit(context, unit);
       }
 
       for (const unit of playerUnits) {
+        if (!unit.alive) {
+          continue;
+        }
+
         drawUnit(context, unit);
       }
     }
@@ -712,13 +839,31 @@
       context.lineWidth = 3;
 
       for (const unit of getAllUnits()) {
-        if (!unit.target) {
+        if (!unit.alive || !unit.target || !unit.target.alive) {
           continue;
         }
 
         context.beginPath();
         context.moveTo(unit.x, unit.y);
         context.lineTo(unit.target.x, unit.target.y);
+        context.stroke();
+      }
+    }
+
+    /**
+     * 绘制远程攻击的短暂飞行线。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     */
+    function drawAttackEffects(context) {
+      for (const effect of attackEffects) {
+        const alpha = effect.timeLeft / effect.duration;
+
+        context.strokeStyle = `rgba(250, 204, 21, ${alpha})`;
+        context.lineWidth = 4;
+        context.beginPath();
+        context.moveTo(effect.fromX, effect.fromY);
+        context.lineTo(effect.toX, effect.toY);
         context.stroke();
       }
     }
@@ -734,8 +879,15 @@
         ? gridToPixel(unit.col, unit.row)
         : { x: unit.x, y: unit.y };
       const radius = battlefield.tileSize * 0.32;
+      const hpBarWidth = battlefield.tileSize * 0.72;
+      const hpBarHeight = 5;
+      const hpPercent = Math.max(0, unit.hp / unit.maxHp);
 
-      context.fillStyle = unit.team === "player" ? "#3b82f6" : "#ef4444";
+      if (unit.flashTimer > 0) {
+        context.fillStyle = "#fef3c7";
+      } else {
+        context.fillStyle = unit.team === "player" ? "#3b82f6" : "#ef4444";
+      }
       context.beginPath();
       context.arc(center.x, center.y, radius, 0, Math.PI * 2);
       context.fill();
@@ -751,6 +903,18 @@
         context.arc(center.x, center.y, radius + 5, 0, Math.PI * 2);
         context.stroke();
       }
+
+      const hpBarX = center.x - hpBarWidth / 2;
+      const hpBarY = center.y - radius - 11;
+      context.fillStyle = "#1f2937";
+      context.fillRect(hpBarX, hpBarY, hpBarWidth, hpBarHeight);
+
+      context.fillStyle = "#22c55e";
+      context.fillRect(hpBarX, hpBarY, hpBarWidth * hpPercent, hpBarHeight);
+
+      context.strokeStyle = "#cbd5e1";
+      context.lineWidth = 1;
+      context.strokeRect(hpBarX, hpBarY, hpBarWidth, hpBarHeight);
 
       context.fillStyle = "#f8fafc";
       context.font = "12px Arial, Microsoft YaHei, sans-serif";
@@ -775,7 +939,7 @@
      */
     function isCurrentTarget(unit) {
       return getAllUnits().some(function (attacker) {
-        return attacker.target === unit;
+        return attacker.alive && attacker.target === unit && unit.alive;
       });
     }
 
@@ -787,7 +951,7 @@
     function drawDebugInfo(context) {
       context.fillStyle = "#f8fafc";
       context.font = "20px Arial, Microsoft YaHei, sans-serif";
-      context.fillText("攻击目标选择 - 第9步", 24, 32);
+      context.fillText("自动攻击和死亡 - 第10步", 24, 32);
 
       context.font = "16px Consolas, Microsoft YaHei, monospace";
       context.fillStyle = "#38bdf8";
