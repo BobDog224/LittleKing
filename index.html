@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>小小帝国式战场 - 第8步</title>
+  <title>小小帝国式战场 - 第9步</title>
   <style>
     /* 让页面占满浏览器窗口，并使用深色背景 */
     html,
@@ -139,7 +139,7 @@
       padding: 56
     };
 
-    // 兵种配置。第8步只用来创建、显示和移动单位，不处理攻击。
+    // 兵种配置。第9步只用来创建、显示、移动和选择目标，不处理扣血。
     const unitConfigs = {
       swordsman: {
         name: "剑士",
@@ -209,7 +209,9 @@
         x: 0,
         y: 0,
         direction: team === "player" ? 1 : -1,
-        hasReachedEnd: false
+        hasReachedEnd: false,
+        alive: true,
+        target: null
       };
     }
 
@@ -332,6 +334,16 @@
       return playerUnits.concat(enemyUnits);
     }
 
+    /**
+     * 获取某个单位的敌方单位列表。
+     *
+     * @param {object} unit 当前单位
+     * @returns {object[]} 敌方单位列表
+     */
+    function getEnemyUnitsFor(unit) {
+      return unit.team === "player" ? enemyUnits : playerUnits;
+    }
+
     // 监听鼠标移动，记录鼠标在 canvas 内的位置，并转换成网格坐标
     canvas.addEventListener("mousemove", function (event) {
       const rect = canvas.getBoundingClientRect();
@@ -415,7 +427,7 @@
 
     /**
      * update 用来更新游戏状态。
-     * 第8步处理布阵后的自动横向移动，暂时不处理攻击。
+     * 第9步处理布阵后的自动横向移动和目标选择，暂时不处理扣血。
      *
      * @param {number} deltaTime 距离上一帧过去了多少秒
      */
@@ -441,6 +453,12 @@
      */
     function updateBattleMovement(deltaTime) {
       for (const unit of getAllUnits()) {
+        unit.target = findTargetForUnit(unit);
+
+        if (unit.target) {
+          continue;
+        }
+
         if (unit.hasReachedEnd) {
           continue;
         }
@@ -472,6 +490,41 @@
     }
 
     /**
+     * 为单位寻找当前可攻击目标。
+     * 目标必须是敌方、存活、行范围符合 attackRows，并且横向距离进入 attackRange。
+     *
+     * @param {object} unit 当前单位
+     * @returns {object | null} 找到的最近目标
+     */
+    function findTargetForUnit(unit) {
+      let nearestTarget = null;
+      let nearestDistance = Infinity;
+
+      for (const target of getEnemyUnitsFor(unit)) {
+        if (!target.alive) {
+          continue;
+        }
+
+        const rowOffset = target.row - unit.row;
+        if (!unit.attackRows.includes(rowOffset)) {
+          continue;
+        }
+
+        const horizontalDistanceInTiles = Math.abs(target.x - unit.x) / battlefield.tileSize;
+        if (horizontalDistanceInTiles > unit.attackRange) {
+          continue;
+        }
+
+        if (horizontalDistanceInTiles < nearestDistance) {
+          nearestDistance = horizontalDistanceInTiles;
+          nearestTarget = target;
+        }
+      }
+
+      return nearestTarget;
+    }
+
+    /**
      * render 用来绘制画面。
      * 注意：每一帧都应该先清屏，再绘制最新画面。
      *
@@ -486,6 +539,7 @@
       context.fillRect(0, 0, canvas.width, canvas.height);
 
       drawBattlefield(context);
+      drawTargetLines(context);
       drawUnits(context);
       drawDebugInfo(context);
     }
@@ -645,6 +699,31 @@
     }
 
     /**
+     * 绘制单位当前锁定目标的黄色连线。
+     *
+     * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
+     */
+    function drawTargetLines(context) {
+      if (gameState !== "battle") {
+        return;
+      }
+
+      context.strokeStyle = "rgba(250, 204, 21, 0.75)";
+      context.lineWidth = 3;
+
+      for (const unit of getAllUnits()) {
+        if (!unit.target) {
+          continue;
+        }
+
+        context.beginPath();
+        context.moveTo(unit.x, unit.y);
+        context.lineTo(unit.target.x, unit.target.y);
+        context.stroke();
+      }
+    }
+
+    /**
      * 绘制单个单位。
      *
      * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
@@ -665,6 +744,14 @@
       context.lineWidth = 2;
       context.stroke();
 
+      if (isCurrentTarget(unit)) {
+        context.strokeStyle = "#facc15";
+        context.lineWidth = 4;
+        context.beginPath();
+        context.arc(center.x, center.y, radius + 5, 0, Math.PI * 2);
+        context.stroke();
+      }
+
       context.fillStyle = "#f8fafc";
       context.font = "12px Arial, Microsoft YaHei, sans-serif";
       context.textAlign = "center";
@@ -681,6 +768,18 @@
     }
 
     /**
+     * 判断单位是否正在被任何敌方单位锁定。
+     *
+     * @param {object} unit 单位数据
+     * @returns {boolean} 是否为当前目标
+     */
+    function isCurrentTarget(unit) {
+      return getAllUnits().some(function (attacker) {
+        return attacker.target === unit;
+      });
+    }
+
+    /**
      * 绘制标题、FPS、deltaTime、运行时间和鼠标所在格子。
      *
      * @param {CanvasRenderingContext2D} context canvas 的 2D 绘图上下文
@@ -688,7 +787,7 @@
     function drawDebugInfo(context) {
       context.fillStyle = "#f8fafc";
       context.font = "20px Arial, Microsoft YaHei, sans-serif";
-      context.fillText("自动相向移动 - 第8步", 24, 32);
+      context.fillText("攻击目标选择 - 第9步", 24, 32);
 
       context.font = "16px Consolas, Microsoft YaHei, monospace";
       context.fillStyle = "#38bdf8";
