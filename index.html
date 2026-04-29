@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>小小帝国式战场 - 第7步</title>
+  <title>小小帝国式战场 - 第8步</title>
   <style>
     /* 让页面占满浏览器窗口，并使用深色背景 */
     html,
@@ -139,7 +139,7 @@
       padding: 56
     };
 
-    // 兵种配置。第7步只用来创建和显示单位，不处理移动和攻击。
+    // 兵种配置。第8步只用来创建、显示和移动单位，不处理攻击。
     const unitConfigs = {
       swordsman: {
         name: "剑士",
@@ -205,8 +205,33 @@
         speed: config.speed,
         attackRange: config.attackRange,
         attackCooldown: config.attackCooldown,
-        attackRows: config.attackRows
+        attackRows: config.attackRows,
+        x: 0,
+        y: 0,
+        direction: team === "player" ? 1 : -1,
+        hasReachedEnd: false
       };
+    }
+
+    /**
+     * 把单位当前格子坐标同步成像素坐标。
+     * 进入 battle 阶段前会统一调用，保证单位从布阵格子的中心点出发。
+     *
+     * @param {object} unit 单位数据
+     */
+    function syncUnitPixelPosition(unit) {
+      const position = gridToPixel(unit.col, unit.row);
+      unit.x = position.x;
+      unit.y = position.y;
+    }
+
+    /**
+     * 初始化所有单位的像素位置。
+     */
+    function syncAllUnitPixelPositions() {
+      for (const unit of getAllUnits()) {
+        syncUnitPixelPosition(unit);
+      }
     }
 
     /**
@@ -353,7 +378,9 @@
         return;
       }
 
-      playerUnits.push(createUnit("player", selectedUnitType, clickedGrid.col, clickedGrid.row));
+      const unit = createUnit("player", selectedUnitType, clickedGrid.col, clickedGrid.row);
+      syncUnitPixelPosition(unit);
+      playerUnits.push(unit);
     });
 
     swordsmanButton.addEventListener("click", function () {
@@ -367,6 +394,7 @@
     });
 
     startBattleButton.addEventListener("click", function () {
+      syncAllUnitPixelPositions();
       gameState = "battle";
       syncToolbar();
     });
@@ -387,7 +415,7 @@
 
     /**
      * update 用来更新游戏状态。
-     * 第7步只处理布阵，不处理移动和战斗。
+     * 第8步处理布阵后的自动横向移动，暂时不处理攻击。
      *
      * @param {number} deltaTime 距离上一帧过去了多少秒
      */
@@ -398,6 +426,48 @@
       // 这里做一个简单保护，避免 deltaTime 为 0 时出现异常。
       if (deltaTime > 0) {
         fps = 1 / deltaTime;
+      }
+
+      if (gameState === "battle") {
+        updateBattleMovement(deltaTime);
+      }
+    }
+
+    /**
+     * battle 阶段双方单位沿所在行水平移动。
+     * 玩家向右，敌人向左；到达对方底线后停住。
+     *
+     * @param {number} deltaTime 距离上一帧过去了多少秒
+     */
+    function updateBattleMovement(deltaTime) {
+      for (const unit of getAllUnits()) {
+        if (unit.hasReachedEnd) {
+          continue;
+        }
+
+        const endCol = unit.team === "player"
+          ? battlefield.enemyEndCol
+          : battlefield.playerStartCol;
+        const endX = gridToPixel(endCol, unit.row).x;
+        const moveDistance = unit.speed * deltaTime * unit.direction;
+
+        unit.x += moveDistance;
+
+        if (unit.team === "player" && unit.x >= endX) {
+          unit.x = endX;
+          unit.hasReachedEnd = true;
+        }
+
+        if (unit.team === "enemy" && unit.x <= endX) {
+          unit.x = endX;
+          unit.hasReachedEnd = true;
+        }
+
+        const currentGrid = pixelToGrid(unit.x, unit.y);
+        if (currentGrid) {
+          unit.col = currentGrid.col;
+          unit.row = currentGrid.row;
+        }
       }
     }
 
@@ -581,7 +651,9 @@
      * @param {object} unit 单位数据
      */
     function drawUnit(context, unit) {
-      const center = gridToPixel(unit.col, unit.row);
+      const center = gameState === "deploy"
+        ? gridToPixel(unit.col, unit.row)
+        : { x: unit.x, y: unit.y };
       const radius = battlefield.tileSize * 0.32;
 
       context.fillStyle = unit.team === "player" ? "#3b82f6" : "#ef4444";
@@ -616,7 +688,7 @@
     function drawDebugInfo(context) {
       context.fillStyle = "#f8fafc";
       context.font = "20px Arial, Microsoft YaHei, sans-serif";
-      context.fillText("玩家布阵阶段 - 第7步", 24, 32);
+      context.fillText("自动相向移动 - 第8步", 24, 32);
 
       context.font = "16px Consolas, Microsoft YaHei, monospace";
       context.fillStyle = "#38bdf8";
@@ -656,6 +728,7 @@
     }
 
     updateBattlefieldLayout();
+    syncAllUnitPixelPositions();
     syncToolbar();
     requestAnimationFrame(gameLoop);
   </script>
